@@ -8,13 +8,12 @@ from tracker import AnyGraspTracker
 from gsnet import AnyGrasp
 import rospy
 from std_msgs.msg import String
-import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--checkpoint_path', required=True, help='Model checkpoint path')
 parser.add_argument('--filter', type=str, default='oneeuro', help='Filter to smooth grasp parameters(rotation, width, depth). [oneeuro/kalman/none]')
 parser.add_argument('--debug', action='store_true', help='Enable visualization')
-parser.add_argument('--max_gripper_width', type=float, default=0.1, help='Maximum gripper width (<=0.1m)')
+parser.add_argument('--max_gripper_width', type=float, default=0.085, help='Maximum gripper width (<=0.1m)')
 parser.add_argument('--gripper_height', type=float, default=0.03, help='Gripper height')
 parser.add_argument('--top_down_grasp', action='store_true', help='Output top-down grasps')
 parser.add_argument('--method', type=String, default="detection", help='Method to get grasping positions')
@@ -64,7 +63,7 @@ class RealSense2Camera:
         # Publishers
         self.grasp_pose_pub = rospy.Publisher('/grasp_pose', String, queue_size=10)
         
-        self.rate = rospy.Rate(6)
+        self.rate = rospy.Rate(60)
         
 
     def _active_sensor(self):
@@ -88,10 +87,8 @@ class RealSense2Camera:
             return
 
         # Get BGR image from data
-        current_image = np.frombuffer(image.data, dtype=np.uint8).reshape(
+        self.current_image = np.frombuffer(image.data, dtype=np.uint8).reshape(
             image.height, image.width, -1)
-        # Transfer BGR into RGB
-        self.current_image = current_image[:, :, [2, 1, 0]]
 
         self.color_sensor_state['active'] = False
         self.color_sensor_state['ready'] = True
@@ -235,10 +232,10 @@ def demo():
         vis = o3d.visualization.Visualizer()
         vis.create_window(height=camera.height, width=camera.width)
     
-    
-    xmin, xmax = -0.19, 0.12
-    ymin, ymax = 0.02, 0.15
-    zmin, zmax = 0.0, 1.0
+    # NOTE GPU memory depends on size of lims
+    xmin, xmax = -0.20, 0.20
+    ymin, ymax = -0.20, 0.20
+    zmin, zmax = 0.0, 0.5
     lims = [xmin, xmax, ymin, ymax, zmin, zmax]
     
     for i in range(1000):
@@ -291,15 +288,19 @@ def demo():
         elif cfgs.method.data == "detection":
             points = np.float32(points)
             colors = np.float32(colors)
+            if points.size == 0 or colors.size==0:
+                print('No points in the space!')
+                camera.rate.sleep()
+                continue
             gg, cloud = anygrasp.get_grasp(points, colors, lims)
 
             if len(gg) == 0:
                 print('No Grasp detected after collision detection!')
+                camera.rate.sleep()
+                continue
 
             gg = gg.nms().sort_by_score()
             target_gg = gg[0:20]
-            print(target_gg.scores)
-            print('grasp score:', target_gg[0].score)
             
             best_index = np.argmax(target_gg.scores)
             best_depth = target_gg.depths[best_index]

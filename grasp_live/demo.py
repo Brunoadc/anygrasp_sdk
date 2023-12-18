@@ -2,20 +2,31 @@ import os
 import argparse
 import numpy as np
 import open3d as o3d
-from sensor_msgs.msg import Image, PointCloud2, CameraInfo
 from graspnetAPI import GraspGroup
 from tracker import AnyGraspTracker
 from gsnet import AnyGrasp
 import rospy
+
 from std_msgs.msg import String
+from geometry_msgs.msg import PoseStamped
+from sensor_msgs.msg import Image, PointCloud2, CameraInfo, JointState
+
+from tf.transformations import euler_from_quaternion, quaternion_matrix, quaternion_from_matrix
+import roboticstoolbox as rtb
+from spatialmath import SE3
+from spatialmath.base import trnorm
+
+
+dirname = os.path.dirname(__file__)
+filename = os.path.join(dirname, 'log/checkpoint_detection.tar')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--checkpoint_path', required=True, help='Model checkpoint path')
+parser.add_argument('--checkpoint_path', required=False, default=filename, help='Model checkpoint path')
 parser.add_argument('--filter', type=str, default='oneeuro', help='Filter to smooth grasp parameters(rotation, width, depth). [oneeuro/kalman/none]')
 parser.add_argument('--debug', action='store_true', help='Enable visualization')
 parser.add_argument('--max_gripper_width', type=float, default=0.085, help='Maximum gripper width (<=0.1m)')
 parser.add_argument('--gripper_height', type=float, default=0.03, help='Gripper height')
-parser.add_argument('--top_down_grasp', action='store_true', help='Output top-down grasps')
+parser.add_argument('--top_down_grasp', type=bool, default=True, help='Output top-down grasps')
 parser.add_argument('--method', type=String, default="detection", help='Method to get grasping positions')
 cfgs = parser.parse_args()
 
@@ -38,10 +49,14 @@ class RealSense2Camera:
         
         self.color_topic = "/camera/color/image_raw"
         self.depth_topic = "/camera/aligned_depth_to_color/image_raw"
+        
+        #self.camera_topic = "/vrpn_client_node/franka_base16/pose"
+        self.camera_topic = "/vrpn_client_node/cam_grasp/pose_transform"
 
         # From rostopic /camera/aligned_depth_to_color/camera_info K:
         #TODO get this from rostopic
         self.camera_intrinsics = None
+        self.camera_pose = None
 
         self.fx = None
         self.fy = None
@@ -57,18 +72,44 @@ class RealSense2Camera:
             self.color_topic, Image, self.callback_receive_color_image, queue_size=1)
         self.depth_sub = rospy.Subscriber(
             self.depth_topic, Image, self.callback_receive_depth_image, queue_size=1)
-        self.sub = rospy.Subscriber(
+        self.intrinsics_sub = rospy.Subscriber(
             self.intrinsics_topic, CameraInfo, self.callback_intrinsics, queue_size=1)
+        self.camera_sub = rospy.Subscriber(
+            self.camera_topic, PoseStamped, self.callback_camera_pose)
         
         # Publishers
-        self.grasp_pose_pub = rospy.Publisher('/grasp_pose', String, queue_size=10)
+        self.grasp_pose_pub = rospy.Publisher('/grasp_pose', PoseStamped, queue_size=1)
+        self.grasp_pose_above_pub = rospy.Publisher('/grasp_pose_above', PoseStamped, queue_size=1)
+        self.grasp_pose_joint_pub = rospy.Publisher('/grasp_pose/joint_space', JointState, queue_size=1)
+        self.grasp_pose_above_joint_pub = rospy.Publisher('/grasp_pose_above/joint_space', JointState, queue_size=1)
         
-        self.rate = rospy.Rate(60)
+        self.init_pose_joint_pub = rospy.Publisher('/init_pose/joint_space', JointState, queue_size=1)
+        
+        self.rate = rospy.Rate(1)
+        self.roll = 0
+        self.pitch = 0
+        self.yaw = 0
         
 
     def _active_sensor(self):
         self.color_sensor_state['active'] = True
         self.depth_sensor_state['active'] = True
+        
+    
+    def callback_camera_pose(self, data):# Extract quaternion from PoseStamped message
+        self.camera_pose = data.pose
+        
+        # quaternion = (
+        #     data.pose.orientation.x,
+        #     data.pose.orientation.y,
+        #     data.pose.orientation.z,
+        #     data.pose.orientation.w
+        # )
+
+        # # Convert quaternion to Euler angles in degrees
+        # euler_angles = euler_from_quaternion(quaternion)
+        # roll, pitch, yaw = euler_angles
+        # self.roll, self.pitch, self.yaw = roll * 180 / 3.14159, pitch * 180 / 3.14159, yaw * 180 / 3.14159
 
     def callback_intrinsics(self, data):
         self.intrinsics = data
@@ -80,7 +121,7 @@ class RealSense2Camera:
         self.cx = self.camera_intrinsics[0, 2]
         self.cy = self.camera_intrinsics[1, 2]
         self.scale = 1/0.001
-        self.sub.unregister()
+        self.intrinsics_sub.unregister()
 
     def callback_receive_color_image(self, image):
         if not self.color_sensor_state['active']:
@@ -158,7 +199,7 @@ class RealSense2Camera:
             rospy.sleep(0.1)
             i += 1
             print(i, end='\r')
-            if i >= 30:
+            if i >= 10:
                 print("No image")
                 exit()
                 
@@ -210,6 +251,80 @@ def get_data(camera):
 
     return points, colors
 
+def pose_stamped_to_matrix(pose_stamped_msg):
+    # Extract position and orientation from the PoseStamped message
+    position = pose_stamped_msg.position
+    orientation = pose_stamped_msg.orientation
+
+    # Convert quaternion to a 3x3 rotation matrix
+    rotation_matrix = quaternion_matrix([orientation.x, orientation.y, orientation.z, orientation.w])
+
+    # Create a 4x4 transformation matrix
+    transformation_matrix = np.eye(4)
+    transformation_matrix[:3, :3] = rotation_matrix[:3, :3]
+    transformation_matrix[:3, 3] = [position.x, position.y, position.z]
+
+    return transformation_matrix
+
+def matrix_to_pose_stamped(transform_matrix):
+    # Extract rotation matrix and translation vector from the transformation matrix
+    rotation_matrix = transform_matrix[:3, :3]
+    translation_vector = transform_matrix[:3, 3]
+
+    # Convert the rotation matrix to quaternion
+    quaternion = quaternion_from_matrix(transform_matrix)
+
+    # Create a PoseStamped message
+    pose_stamped_msg = PoseStamped()
+    pose_stamped_msg.pose.position.x = translation_vector[0]
+    pose_stamped_msg.pose.position.y = translation_vector[1]
+    pose_stamped_msg.pose.position.z = translation_vector[2]
+    pose_stamped_msg.pose.orientation.x = quaternion[0]
+    pose_stamped_msg.pose.orientation.y = quaternion[1]
+    pose_stamped_msg.pose.orientation.z = quaternion[2]
+    pose_stamped_msg.pose.orientation.w = quaternion[3]
+
+    return pose_stamped_msg
+
+
+def q_list_to_joint_state(q):
+    q_ros = JointState()
+    n = q.size
+    
+    
+    # Set the header information (optional)
+    q_ros.header.stamp = rospy.Time.now()
+    q_ros.header.frame_id = 'base_link'  # Replace with your desired frame_id
+
+    # Set the joint names
+    q_ros.name = [f'joint{i}' for i in range(1, n + 1)]  # Replace with your joint names
+
+    # Set the joint positions
+    q_ros.position = q  # Replace with your desired joint positions
+
+    # Set the joint velocities (zero velocities)
+    q_ros.velocity =  [0.0] * n
+
+    # Set the joint efforts (optional, set to zero if not applicable)
+    q_ros.effort =  [0.0] * n
+    
+    return q_ros
+
+def points_in_lims(lims, points):
+    x_min, x_max, y_min, y_max, z_min, z_max = lims
+    
+    # Create boolean masks for each dimension
+    mask_x = (points[:, 0] >= x_min) & (points[:, 0] <= x_max)
+    mask_y = (points[:, 1] >= y_min) & (points[:, 1] <= y_max)
+    mask_z = (points[:, 2] >= z_min) & (points[:, 2] <= z_max)
+
+    # Combine the masks using logical AND to find points inside all limits
+    mask_all = mask_x & mask_y & mask_z
+
+    # Get the indices of points that satisfy the conditions
+    indices_of_points_inside_limits = np.where(mask_all)[0]
+    return indices_of_points_inside_limits
+
 def demo():
     # intialization
     # TODO remove tracking once sure detection is the good method
@@ -226,7 +341,18 @@ def demo():
     while camera.scale == None:
         print("Waiting for camera intrinsics", end='\r')
         camera.rate.sleep()
-    print("intrinsics parameters acquired")
+    print("Intrinsics parameters acquired")
+    
+    
+    while camera.camera_pose == None:
+        print("Waiting for optitrack data of camera pose", end='\r')
+        camera.rate.sleep()
+    print("Camera detected")
+        
+    # while True:
+    #     angles = "Roll: " + str("{:.2f}".format(camera.roll)) + " Pitch: " + str("{:.2f}".format(camera.pitch)) + " Yaw: " + str("{:.2f}".format(camera.yaw))
+    #     camera.grasp_pose_pub.publish(angles)
+    #     camera.rate.sleep()
         
     if cfgs.debug:
         vis = o3d.visualization.Visualizer()
@@ -235,10 +361,19 @@ def demo():
     # NOTE GPU memory depends on size of lims
     xmin, xmax = -0.20, 0.20
     ymin, ymax = -0.20, 0.20
-    zmin, zmax = 0.0, 0.5
+    zmin, zmax = 0.1, 0.8
     lims = [xmin, xmax, ymin, ymax, zmin, zmax]
     
-    for i in range(1000):
+    robot = rtb.models.DH.Panda()
+    robot.tool.t = [0.0, 0.0, 0.15]
+    Te = robot.fkine(robot.qr)
+    robot.qr[1]=-0.5
+    robot.qr[6]=0
+    
+    POINTSLIMS = False
+    
+    
+    for i in range(1000000):
         # get prediction
         points, colors = get_data(camera)
         
@@ -263,7 +398,6 @@ def demo():
             best_rot = target_gg.rotation_matrices[best_index]
             
             print(best_trans)
-            camera.grasp_pose_pub.publish(str(best_trans))
             
             # visualization
             if cfgs.debug:
@@ -288,11 +422,21 @@ def demo():
         elif cfgs.method.data == "detection":
             points = np.float32(points)
             colors = np.float32(colors)
+            if (POINTSLIMS):
+                index_in_lims = points_in_lims(lims, points)
+                points = points[index_in_lims,:]
+                colors = colors[index_in_lims,:]
+            
             if points.size == 0 or colors.size==0:
                 print('No points in the space!')
                 camera.rate.sleep()
                 continue
-            gg, cloud = anygrasp.get_grasp(points, colors, lims)
+            try:
+                gg, cloud = anygrasp.get_grasp(points, colors, lims)
+            except:
+                print('Problem inside NN')
+                camera.rate.sleep()
+                continue
 
             if len(gg) == 0:
                 print('No Grasp detected after collision detection!')
@@ -300,7 +444,7 @@ def demo():
                 continue
 
             gg = gg.nms().sort_by_score()
-            target_gg = gg[0:20]
+            target_gg = gg[0:10]
             
             best_index = np.argmax(target_gg.scores)
             best_depth = target_gg.depths[best_index]
@@ -309,10 +453,98 @@ def demo():
             best_trans = target_gg.translations[best_index]
             best_rot = target_gg.rotation_matrices[best_index]
             
-            print(best_trans)
-            camera.grasp_pose_pub.publish(str(best_trans))
             
+            #Transformation matrix robot-camera (basically camera pose in robot frame)
+            T_r_c = pose_stamped_to_matrix(camera.camera_pose)
+            
+            #Transformation matrix camera-anygrap pose
+            T_c_a = np.eye(4)
+            T_c_a[:3, :3] = best_rot
+            T_c_a[:3, 3] = best_trans
+            
+            #Transformation matrix robot-anygrasp pose
+            T_r_a = T_r_c @ T_c_a
+            
+            
+            # Y rotation to correct for Anygrasp frame -> franka robot frame
+            rotation_matrix_y = np.array([
+                [0, 0, 1],
+                [0, 1, 0],
+                [-1, 0, 0]
+            ])
+            rotation_matrix_z = np.array([
+                [0, 1, 0],
+                [-1, 0, 0],
+                [0, 0, 1]
+            ])
+            matrix_orientation =  np.eye(4)
+            matrix_orientation[:3, :3] = rotation_matrix_y #@ rotation_matrix_z
+            T_r_a = T_r_a @ matrix_orientation
+            
+            
+            # Transformation to get the EE gripper at correct pose
+            offset_grasp = cfgs.gripper_height
+            T_r_a[:3, 3] = T_r_a[:3, 3] + offset_grasp * T_r_a[:3, 2]
+            
+            # Transformation to get a pose that is above the grasping point in enf effector direction
+            offset_z = -0.10
+            T_r_a_above = np.copy(T_r_a)
+            translation_vector = T_r_a[:3, 3] + offset_z * T_r_a[:3, 2]
+            T_r_a_above[:3, 3] = translation_vector
+    
+            
+            
+            # Pose topic creation
+            pose_grasp = matrix_to_pose_stamped(T_r_a)
+            pose_grasp_above = matrix_to_pose_stamped(T_r_a_above)
+            
+            # To verify x=0 and y=0
+            #T_r_a_above[:3, 3] = np.array([0,0,0.6])
+            #T_r_a[:3, 3] = np.array([0,0,0.6])
+            
+            
+            
+            # Solver in joint position for end effector position
+            Tep_above = SE3(trnorm(T_r_a_above))
+            sol_above = robot.ik_LM(Tep_above, q0=robot.qr)         # solve IK
+            q_pickup_above = sol_above[0]
+            solution_found_above = sol_above[1]
+            
+            Tep = SE3(trnorm(T_r_a))
+            sol = robot.ik_LM(Tep, q0=q_pickup_above)         # solve IK
+            q_pickup = sol[0]
+            solution_found = sol[1]
+            
+            
+            #Verification of negative
+            if q_pickup[6] < -np.pi/2:
+                q_pickup[6] += np.pi
+                q_pickup_above[6] += np.pi
+            
+            #offset for last joint due to gripper
+            offset = np.zeros(7)
+            offset[6] = -np.radians(35)
+            
+            
+            
+            camera.init_pose_joint_pub.publish(q_list_to_joint_state(robot.qr+offset))
+            if solution_found and solution_found_above:
+                camera.grasp_pose_pub.publish(pose_grasp)
+                camera.grasp_pose_above_pub.publish(pose_grasp_above)
+                camera.grasp_pose_joint_pub.publish(q_list_to_joint_state(q_pickup+offset))
+                camera.grasp_pose_above_joint_pub.publish(q_list_to_joint_state(q_pickup_above+offset))
+                print("Solution found")
+                print("Anygrasp score: " + str(target_gg.scores[0]))
+            else:
+                if not solution_found:
+                    print("Impossible to reach pose: " + str(T_r_a))
+                    print
+                
+                if not solution_found_above:
+                    print("Impossible to reach above pose")
+                            
             if cfgs.debug:
+                #TODO plot only points in the workspace limits
                 trans_mat = np.array([[1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,1]])
                 cloud = o3d.geometry.PointCloud()
                 cloud.points = o3d.utility.Vector3dVector(points)
@@ -329,6 +561,12 @@ def demo():
                 for gripper in grippers:
                     vis.remove_geometry(gripper)
 
+            
+            #qt = rtb.jtraj(robot.qr, q_pickup_above, 50)
+            #qt2 = rtb.jtraj(q_pickup_above, q_pickup, 20)
+            #robot.plot(np.concatenate((qt.q,qt2.q),axis=0), backend='pyplot', movie='panda1.gif')
+            #Te = robot.fkine(robot.qr)  # forward kinematics
+            #print(Te)
         
         camera.rate.sleep()
 

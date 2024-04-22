@@ -59,6 +59,9 @@ class RealSense2Camera:
         
         #self.camera_topic = "/vrpn_client_node/franka_base16/pose"
         self.camera_topic = "/vrpn_client_node/cam_grasp/pose_transform"
+        
+        self.ee_topic = "robot_ee"
+        self.joint_topic = "robot_joint"
 
         # From rostopic /camera/aligned_depth_to_color/camera_info K:
         #TODO get this from rostopic
@@ -73,6 +76,9 @@ class RealSense2Camera:
 
         self.color_sensor_state = {'active': False, 'ready': False}
         self.depth_sensor_state = {'active': False, 'ready': False}
+        
+        self.ee = None
+        self.joint = None
 
         # Subscribers
         self.image_sub = rospy.Subscriber(
@@ -83,6 +89,11 @@ class RealSense2Camera:
             self.intrinsics_topic, CameraInfo, self.callback_intrinsics, queue_size=1)
         self.camera_sub = rospy.Subscriber(
             self.camera_topic, PoseStamped, self.callback_camera_pose, queue_size=1)
+        self.ee_sub = rospy.Subscriber(
+            self.ee_topic, PoseStamped, self.callback_ee, queue_size=1)
+        self.joint_sub = rospy.Subscriber(
+            self.joint_topic, JointState, self.callback_joint, queue_size=1)
+        
         
         # Publishers
         self.grasp_pose_pub = rospy.Publisher('/grasp_pose', PoseStamped, queue_size=1)
@@ -101,17 +112,14 @@ class RealSense2Camera:
         
         
         self.rate = rospy.Rate(10)
-        self.roll = 0
-        self.pitch = 0
-        self.yaw = 0
         
         
         # NOTE GPU memory depends on size of lims
-        xmin, xmax = -0.30, 0.30
-        ymin, ymax = -0.30, 0.30
-        zmin, zmax = 0.0, 0.60
+        xmin, xmax = -0.25, 0.25
+        ymin, ymax = -0.25, 0.25
+        zmin, zmax = 0.0, 0.80
         self.lims = [xmin, xmax, ymin, ymax, zmin, zmax]
-        self.threshold_grasp_score = 0.4
+        self.threshold_grasp_score = 0.31
         
 
     def _active_sensor(self):
@@ -194,10 +202,14 @@ class RealSense2Camera:
         self.depth_sensor_state['active'] = False
         self.depth_sensor_state['ready'] = True
 
-
     def callback_anygrasp_trigger(self, bool):
         self.triggered_grasp = True
 
+    def callback_ee(self, data):
+        self.ee = data.pose
+    
+    def callback_joint(self, data):
+        self.joint = data.position
 
     def trigger_compute(self):
         rospy.loginfo("Received trigger request")
@@ -238,7 +250,10 @@ class RealSense2Camera:
         
         
         #Transformation matrix robot-camera (basically camera pose in robot frame)
-        T_r_c = np.linalg.inv(X2) @ pose_stamped_to_matrix(camera.camera_pose) @ X1
+        # Using Optitrack
+        # T_r_c = np.linalg.inv(X2) @ pose_stamped_to_matrix(camera.camera_pose) @ X1
+        # Using FK
+        T_r_c = pose_stamped_to_matrix(camera.ee) @ np.linalg.inv(Y2) @ X1
         
         #Transformation matrix camera-anygrap pose
         T_c_a = np.eye(4)
@@ -264,7 +279,7 @@ class RealSense2Camera:
         
         
         # Transformation to get the EE gripper at correct pose
-        offset_grasp = cfgs.gripper_height
+        offset_grasp = cfgs.gripper_height + 0.005
         T_r_a[:3, 3] = T_r_a[:3, 3] + offset_grasp * T_r_a[:3, 2]   
         
         # Transformation to get a pose that is above the grasping point in enf effector direction
@@ -275,7 +290,7 @@ class RealSense2Camera:
         
         # Solver in joint position for end effector position
         Tep_above = SE3(trnorm(T_r_a_above))
-        sol_above = robot.ik_LM(Tep_above, q0=robot.qr)         # solve IK
+        sol_above = robot.ik_LM(Tep_above, q0=self.joint)         # solve IK
         q_pickup_above = sol_above[0]
         solution_found_above = sol_above[1]
         
@@ -365,7 +380,7 @@ class RealSense2Camera:
             rospy.sleep(0.1)
             i += 1
             print(i, end='\r')
-            if i >= 10:
+            if i >= 20:
                 print("No image")
                 exit()
                 
@@ -507,10 +522,10 @@ def demo():
     print("Intrinsics parameters acquired")
     
     
-    while camera.camera_pose == None:
-        print("Waiting for optitrack data of camera pose", end='\r')
+    while camera.ee == None:
+        print("Waiting for robot data of ee pose", end='\r')
         camera.rate.sleep()
-    print("Camera detected")
+    print("EE pose detected")
     
     while not rospy.is_shutdown():
         while camera.triggered_grasp == True:
@@ -534,13 +549,18 @@ if __name__ == "__main__":
     robot.qr[6]=0
     robot.qr = [0.4, -0.169, -0.374, -2.061, -0.065, 1.95, 0.057]
 
-    anygrasp = AnyGrasp(cfgs)
-    anygrasp.load_net()
     
     # Determine the path for loading the .npy files
     script_dir = os.path.dirname(os.path.realpath(__file__))
     X1 = np.load(os.path.join(script_dir, 'X1_matrices.npy'))
     X2 = np.load(os.path.join(script_dir, 'X2_matrices.npy'))
+    Y2 = np.load(os.path.join(script_dir, 'Y2_matrices.npy'))
+    #test = np.array([[1,0,0,1],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+    #answer = np.linalg.inv(X2) @ test
     
     camera = RealSense2Camera()
+    
+    anygrasp = AnyGrasp(cfgs)
+    anygrasp.load_net()
+    
     demo()

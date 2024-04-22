@@ -79,28 +79,13 @@ class RealSense2Camera:
         self.camera_sub = rospy.Subscriber(
             self.camera_topic, PoseStamped, self.callback_camera_pose)
         
-        # Publishers
-        self.grasp_pose_pub = rospy.Publisher('/grasp_pose', PoseStamped, queue_size=1)
-        self.grasp_pose_above_pub = rospy.Publisher('/grasp_pose_above', PoseStamped, queue_size=1)
-        self.grasp_pose_joint_pub = rospy.Publisher('/grasp_pose/joint_space', JointState, queue_size=1)
-        self.grasp_pose_above_joint_pub = rospy.Publisher('/grasp_pose_above/joint_space', JointState, queue_size=1)
-        
-        self.init_pose_joint_pub = rospy.Publisher('/init_pose/joint_space', JointState, queue_size=1)
-        
-        # Services
-        self.service = rospy.Service('grasp_pose_srv', Trigger, self.trigger_callback)
-        self.plot_triggered_grasp = False
-        
         self.rate = rospy.Rate(10)
-        self.roll = 0
-        self.pitch = 0
-        self.yaw = 0
         
         
         # NOTE GPU memory depends on size of lims
-        xmin, xmax = -0.30, 0.30
-        ymin, ymax = -0.30, 0.30
-        zmin, zmax = 0.0, 0.50
+        xmin, xmax = -0.25, 0.25
+        ymin, ymax = -0.25, 0.25
+        zmin, zmax = 0.0, 0.80
         self.lims = [xmin, xmax, ymin, ymax, zmin, zmax]
         
 
@@ -183,45 +168,6 @@ class RealSense2Camera:
 
         self.depth_sensor_state['active'] = False
         self.depth_sensor_state['ready'] = True
-
-    def trigger_callback(self, req, *args, **kwargs):
-        rospy.loginfo("Received trigger request")
-        
-        
-        self.grasp_pose_pub.publish(self.grasp_pose)
-        self.grasp_pose_above_pub.publish(self.grasp_pose_above)
-        self.grasp_pose_joint_pub.publish(self.pose_joint)
-        self.grasp_pose_above_joint_pub.publish(self.grasp_pose_above_joint)
-        
-        self.plot_triggered_grasp = True
-        rospy.loginfo("Trigger successful")
-        print(self.grasp_pose_above)
-        return TriggerResponse(success=True, message="Trigger successful")
-        
-        
-
-    def plot_triggered_grasp_pose(self):
-    
-        print(self.grasp_pose)
-        
-        self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window(height=self.height, width=self.width)
-        
-        trans_mat = np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
-        cloud = o3d.geometry.PointCloud()
-        index_in_lims = points_in_lims(self.lims, self.points)
-        points = copy.deepcopy(self.points[index_in_lims,:])
-        colors = copy.deepcopy(self.colors[index_in_lims,:])
-        cloud.points = o3d.utility.Vector3dVector(points)
-        cloud.colors = o3d.utility.Vector3dVector(colors)
-        cloud.transform(trans_mat)
-        gripper = self.target_gg[0].to_open3d_geometry()
-        gripper.transform(trans_mat)
-        self.vis.add_geometry(cloud)
-        self.vis.add_geometry(gripper)
-        self.vis.poll_events()
-        self.vis.remove_geometry(cloud)
-        self.vis.remove_geometry(gripper)
         
 
     def get_rgbd_images(self):
@@ -386,10 +332,10 @@ def demo():
     print("Intrinsics parameters acquired")
     
     
-    while camera.camera_pose == None:
-        print("Waiting for optitrack data of camera pose", end='\r')
-        camera.rate.sleep()
-    print("Camera detected")
+    # while camera.camera_pose == None:
+    #     print("Waiting for optitrack data of camera pose", end='\r')
+    #     camera.rate.sleep()
+    # print("Camera detected")
         
     # while True:
     #     angles = "Roll: " + str("{:.2f}".format(camera.roll)) + " Pitch: " + str("{:.2f}".format(camera.pitch)) + " Yaw: " + str("{:.2f}".format(camera.yaw))
@@ -400,13 +346,9 @@ def demo():
     robot = rtb.models.DH.Panda()
     robot.tool.t = [0.0, 0.0, 0.15]
     Te = robot.fkine(robot.qr)
-    robot.qr[1]=-0.5
-    robot.qr[6]=0
+    robot.qr[1] = -0.5
+    robot.qr[6] = 0
     robot.qr = [0.4, -0.169, -0.374, -2.061, -0.065, 1.903, 0.057]
-    
-    array_gg = GraspGroup()
-    array_time = np.array([])
-    time_memory_gg = 0.2
     
     cfgs.debug = True
     if cfgs.debug:
@@ -419,6 +361,7 @@ def demo():
     # Load the A and B matrices from .npy files in the same directory as the script
     X1 = np.load(os.path.join(script_dir, 'X1_matrices.npy'))
     X2 = np.load(os.path.join(script_dir, 'X2_matrices.npy'))
+    Y2 = np.load(os.path.join(script_dir, 'Y2_matrices.npy'))
     
     for i in range(1000000):
         # get prediction
@@ -446,116 +389,26 @@ def demo():
             camera.rate.sleep()
             continue
 
-        ros_time = rospy.Time.now()
-        time = ros_time.secs + ros_time.nsecs /10**9
-        array_gg.add(current_gg)
-        array_time = np.concatenate((array_time, np.ones(len(current_gg)) * time))
+        # If you want to remember grasps along frames (image must not move obviously)
+        # ros_time = rospy.Time.now()
+        # time = ros_time.secs + ros_time.nsecs /10**9
+        # array_gg.add(current_gg)
+        # array_time = np.concatenate((array_time, np.ones(len(current_gg)) * time))
         
-        index_to_delete =  time - array_time > time_memory_gg
+        # index_to_delete =  time - array_time > time_memory
         
-        array_gg.remove(index_to_delete)
-        array_time = array_time[np.invert(index_to_delete)]
+        # array_gg.remove(index_to_delete)
+        # array_time = array_time[np.invert(index_to_delete)]
         
         
-        target_gg = copy.deepcopy(array_gg)
+        # target_gg = copy.deepcopy(array_gg)
+        target_gg = current_gg
         target_gg = target_gg.nms().sort_by_score()
-        best_index = np.argmax(target_gg.scores)
-        best_trans = target_gg.translations[best_index]
-        best_rot = target_gg.rotation_matrices[best_index]
-        
-        
-        #Transformation matrix robot-camera (basically camera pose in robot frame)
-        T_r_c = np.linalg.inv(X2) @ pose_stamped_to_matrix(camera.camera_pose) @ X1
-        
-        #Transformation matrix camera-anygrap pose
-        T_c_a = np.eye(4)
-        T_c_a[:3, :3] = best_rot
-        T_c_a[:3, 3] = best_trans
-        
-        #Transformation matrix robot-anygrasp pose
-        T_r_a = T_r_c @ T_c_a
-        
-        # can be used as verification (robot base frame)
-        # print("\nPose camera:\n" +str(T_r_c))
-        # print("\nPose anygrasp:\n" +str(T_r_a))
-        
-        # Y rotation to correct for Anygrasp frame -> franka robot frame
-        rotation_matrix_y = np.array([
-            [0, 0, 1],
-            [0, 1, 0],
-            [-1, 0, 0]
-        ])
-        rotation_matrix_z = np.array([
-            [0, 1, 0],
-            [-1, 0, 0],
-            [0, 0, 1]
-        ])
-        matrix_orientation =  np.eye(4)
-        matrix_orientation[:3, :3] = rotation_matrix_y #@ rotation_matrix_z
-        T_r_a = T_r_a @ matrix_orientation
-        
-        
-        # Transformation to get the EE gripper at correct pose
-        offset_grasp = 0 #cfgs.gripper_height
-        T_r_a[:3, 3] = T_r_a[:3, 3] + offset_grasp * T_r_a[:3, 2]
-        
-        # Transformation to get a pose that is above the grasping point in enf effector direction
-        offset_z = -0.10
-        T_r_a_above = np.copy(T_r_a)
-        translation_vector = T_r_a[:3, 3] + offset_z * T_r_a[:3, 2]
-        T_r_a_above[:3, 3] = translation_vector
-
         
         
         
-        # To verify x=0 and y=0
-        #T_r_a_above[:3, 3] = np.array([0,0,0.6])
-        #T_r_a[:3, 3] = np.array([0,0,0.6])
-        
-        
-        
-        # Solver in joint position for end effector position
-        Tep_above = SE3(trnorm(T_r_a_above))
-        sol_above = robot.ik_LM(Tep_above, q0=robot.qr)         # solve IK
-        q_pickup_above = sol_above[0]
-        solution_found_above = sol_above[1]
-        
-        Tep = SE3(trnorm(T_r_a))
-        sol = robot.ik_LM(Tep, q0=q_pickup_above)         # solve IK
-        q_pickup = sol[0]
-        solution_found = sol[1]
-        
-        
-        #Verification of negative
-        if q_pickup[6] < -np.pi/2:
-            q_pickup[6] += np.pi
-            q_pickup_above[6] += np.pi
-        
-        #offset for last joint due to gripper
-        offset = np.zeros(7)
-        offset[6] = -np.radians(35)
-        
-        
-        
-        camera.init_pose_joint_pub.publish(q_list_to_joint_state(robot.qr+offset))
         camera.target_gg = target_gg
-        print("Anygrasp score: " + str(camera.target_gg.scores[0]))
-        if solution_found and solution_found_above:
-            # Pose topic creation
-            camera.grasp_pose = matrix_to_pose_stamped(T_r_a)
-            camera.grasp_pose_above = matrix_to_pose_stamped(T_r_a_above)
-            camera.pose_joint = q_list_to_joint_state(q_pickup+offset)
-            camera.grasp_pose_above_joint = q_list_to_joint_state(q_pickup_above+offset)
-            
-            #print("Solution found")
-            #print(camera.grasp_pose)
-        else:
-            if not solution_found:
-                print("Impossible to reach pose: ")
-                #print("Impossible to reach pose: " + str(T_r_a))
-            
-            if not solution_found_above:
-                print("Impossible to reach above pose")
+        print("Anygrasp best score: " + str(camera.target_gg.scores[0]))
                         
         if cfgs.debug:
             trans_mat = np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
@@ -586,10 +439,6 @@ def demo():
         Te = robot.fkine(robot.qr)  # forward kinematics
         print(Te)
         '''
-    
-        if camera.plot_triggered_grasp == True:
-            camera.plot_triggered_grasp_pose()
-            camera.plot_triggered_grasp = False
             
     
         camera.rate.sleep()

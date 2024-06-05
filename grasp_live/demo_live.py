@@ -3,9 +3,9 @@ import copy
 import argparse
 import numpy as np
 import open3d as o3d
-from graspnetAPI import GraspGroup
-from tracker import AnyGraspTracker
+
 from gsnet import AnyGrasp
+from graspnetAPI import GraspGroup
 import rospy
 
 from std_msgs.msg import String, Bool

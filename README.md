@@ -1,4 +1,9 @@
+# IMPORTANT! README
+
+## For detailed instructions to use anygrasp with Fanka Panda (Darko project throwing demo), please refer to [this GitHub page](https://github.com/Brunoadc/anygrasp_sdk/blob/main/grasp_live).
+
 <img src="https://user-images.githubusercontent.com/12446953/208367719-4ef7922f-4001-41f7-aa9f-076e462d1325.png" width="60%">
+
 
 # AnyGrasp SDK
 AnyGrasp SDK for grasp detection & tracking.

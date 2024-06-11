@@ -1,5 +1,7 @@
 # This folder contains the scripts to run anygrasp with the franka panda robot (DARKO project demo)
 ## Installation 
+Due to [change of machine feature id for license identification](https://github.com/graspnet/anygrasp_sdk/issues/47) it is not recommended to use docker. 
+
 1. Use the installation script to set up a conda environment with the necessary libraries. The script also installs ROS noetic if not already installed on your PC. 
 ```bash
     cd ..

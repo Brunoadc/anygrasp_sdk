@@ -1,5 +1,5 @@
 ## IMPORTANT! 
-## For detailed instructions to use anygrasp with Fanka Panda (Darko project throwing demo), please refer to [this README](https://github.com/Brunoadc/anygrasp_sdk/blob/main/grasp_robot).
+## For detailed instructions to use anygrasp with Fanka Panda (Darko project throwing demo), please refer to [this README](/grasp_robot).
 
 
 

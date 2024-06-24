@@ -17,6 +17,7 @@ sudo apt-get install -y \
     net-tools \
     python3-pip \
     python3-dev \
+    python3-rosdep2 \
     ros-noetic-realsense2-camera \
     software-properties-common \
     usbutils \

@@ -2,7 +2,8 @@
 ## Installation 
 Due to [change of machine feature id for license identification](https://github.com/graspnet/anygrasp_sdk/issues/47) it is not recommended to use docker. 
 
-1. Use the installation script to set up a conda environment with the necessary libraries. The script also installs ROS noetic if not already installed on your PC. 
+1. Change TORCH_CUDA_ARCH_LIST in install.sh to be [compatible with you GPU](https://developer.nvidia.com/cuda-gpus)
+2. Use the installation script to set up a conda environment with the necessary libraries. The script also installs ROS noetic if not already installed on your PC. 
 ```bash
     cd ..
     source install.sh
@@ -28,6 +29,7 @@ Start the camera node
 ```bash
     bash camera.sh
 ```
+If you have the error ["RS2_USB_STATUS_ACCESS"](https://github.com/IntelRealSense/realsense-ros/issues/1408) try copying [this file](https://github.com/IntelRealSense/librealsense/blob/master/config/99-realsense-libusb.rules) to /etc/udev/rules.d/  
 
 Run the code like `demo_robot.py`, `demo.py` or any desired applications that uses `gsnet.so`.
 ```bash

@@ -28,6 +28,7 @@ Start the camera node
 ```bash
     bash camera.sh
 ```
+If you have the error ["RS2_USB_STATUS_ACCESS"](https://github.com/IntelRealSense/realsense-ros/issues/1408) try copying [this file](https://github.com/IntelRealSense/librealsense/blob/master/config/99-realsense-libusb.rules) to /etc/udev/rules.d/  
 
 Run the code like `demo_robot.py`, `demo.py` or any desired applications that uses `gsnet.so`.
 ```bash

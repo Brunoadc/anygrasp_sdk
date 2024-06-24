@@ -2,7 +2,8 @@
 ## Installation 
 Due to [change of machine feature id for license identification](https://github.com/graspnet/anygrasp_sdk/issues/47) it is not recommended to use docker. 
 
-1. Use the installation script to set up a conda environment with the necessary libraries. The script also installs ROS noetic if not already installed on your PC. 
+1. Change TORCH_CUDA_ARCH_LIST in install.sh to be [compatible with you GPU](https://developer.nvidia.com/cuda-gpus)
+2. Use the installation script to set up a conda environment with the necessary libraries. The script also installs ROS noetic if not already installed on your PC. 
 ```bash
     cd ..
     source install.sh

@@ -3,19 +3,15 @@ import copy
 import argparse
 import numpy as np
 import open3d as o3d
-from graspnetAPI import GraspGroup
+import torch
 from gsnet import AnyGrasp
 import rospy
 
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, PointCloud2, CameraInfo, JointState
-from std_srvs.srv import Trigger, TriggerResponse
 
 from tf.transformations import euler_from_quaternion, quaternion_matrix, quaternion_from_matrix
-import roboticstoolbox as rtb
-from spatialmath import SE3
-from spatialmath.base import trnorm
 
 
 dirname = os.path.dirname(__file__)
@@ -330,37 +326,10 @@ def demo():
         camera.rate.sleep()
     print("Intrinsics parameters acquired")
     
-    
-    # while camera.camera_pose == None:
-    #     print("Waiting for optitrack data of camera pose", end='\r')
-    #     camera.rate.sleep()
-    # print("Camera detected")
-        
-    # while True:
-    #     angles = "Roll: " + str("{:.2f}".format(camera.roll)) + " Pitch: " + str("{:.2f}".format(camera.pitch)) + " Yaw: " + str("{:.2f}".format(camera.yaw))
-    #     camera.grasp_pose_pub.publish(angles)
-    #     camera.rate.sleep()
-        
-    
-    robot = rtb.models.DH.Panda()
-    robot.tool.t = [0.0, 0.0, 0.15]
-    Te = robot.fkine(robot.qr)
-    robot.qr[1] = -0.5
-    robot.qr[6] = 0
-    robot.qr = [0.4, -0.169, -0.374, -2.061, -0.065, 1.903, 0.057]
-    
     cfgs.debug = True
     if cfgs.debug:
         vis = o3d.visualization.Visualizer()
         vis.create_window(height=camera.height, width=camera.width)
-        
-    # Determine the path for loading the .npy files
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    
-    # Load the A and B matrices from .npy files in the same directory as the script
-    X1 = np.load(os.path.join(script_dir, 'X1_matrices.npy'))
-    X2 = np.load(os.path.join(script_dir, 'X2_matrices.npy'))
-    Y2 = np.load(os.path.join(script_dir, 'Y2_matrices.npy'))
     
     for i in range(1000000):
         # get prediction
@@ -387,17 +356,6 @@ def demo():
             print('No Grasp detected after collision detection!')
             camera.rate.sleep()
             continue
-
-        # If you want to remember grasps along frames (image must not move obviously)
-        # ros_time = rospy.Time.now()
-        # time = ros_time.secs + ros_time.nsecs /10**9
-        # array_gg.add(current_gg)
-        # array_time = np.concatenate((array_time, np.ones(len(current_gg)) * time))
-        
-        # index_to_delete =  time - array_time > time_memory
-        
-        # array_gg.remove(index_to_delete)
-        # array_time = array_time[np.invert(index_to_delete)]
         
         
         # target_gg = copy.deepcopy(array_gg)
@@ -429,18 +387,18 @@ def demo():
             for gripper in grippers:
                 vis.remove_geometry(gripper)
             
-        '''
-        print(robot.qr)
-        print(q_pickup_above)
-        qt = rtb.jtraj(robot.qr, q_pickup_above, 50)
-        qt2 = rtb.jtraj(q_pickup_above, q_pickup, 20)
-        robot.plot(np.concatenate((qt.q,qt2.q),axis=0), backend='pyplot', movie='panda1.gif')
-        Te = robot.fkine(robot.qr)  # forward kinematics
-        print(Te)
-        '''
             
     
         camera.rate.sleep()
 
+
+def get_torch_cuda_gpu():
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            print(f"Device {i}: {torch.cuda.get_device_name(i)}")
+    else:
+        print("No CUDA device available.")
+
 if __name__ == "__main__":
+    get_torch_cuda_gpu()
     demo()
